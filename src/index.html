@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NodeConnector Demo</title>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+            background: #0d1117;
+            color: #c9d1d9;
+            font-family: ui-sans-serif, system-ui, -apple-system, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100dvh;
+        }
+        header {
+            background: #161b22;
+            border-bottom: 1px solid #30363d;
+            padding: 10px 20px;
+            font-size: 14px;
+            font-weight: 600;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        header span {
+            font-weight: 400;
+            color: #8b949e;
+            font-size: 12px;
+        }
+        #canvas { flex: 1; position: relative; overflow: hidden; }
+        #nodes-layer { position: absolute; inset: 0; }
+        #svg-canvas { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+        #svg-canvas circle {
+            pointer-events: all;
+        }
+        #svg-canvas path {
+            pointer-events: stroke;
+        }
+        .node {
+            position: absolute;
+            border: 1.5px solid #30363d;
+            border-radius: 8px;
+            background: #1c2128;
+            box-shadow: 2px 2px 8px rgba(0, 0, 0, 0.35);
+            cursor: pointer;
+            user-select: none;
+        }
+        .node.selected { border-color: #58a6ff; }
+        .node-header {
+            height: 28px;
+            background: #21262d;
+            border-radius: 6px 6px 0 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 700;
+            color: #e6edf3;
+        }
+        .node-label {
+            position: absolute;
+            font-size: 11px;
+            color: #8b949e;
+            line-height: 14px;
+        }
+        .node-label.input { left: 12px; }
+        .node-label.output { right: 12px; }
+        #footer {
+            background: #161b22;
+            border-top: 1px solid #30363d;
+            padding: 8px 20px;
+            font-size: 12px;
+            color: #8b949e;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+        #status b { color: #79c0ff; font-weight: 600; }
+        #debug-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            user-select: none;
+            color: #8b949e;
+        }
+        #debug-toggle input[type="checkbox"] { display: none; }
+        #debug-pill {
+            width: 32px;
+            height: 18px;
+            border-radius: 9px;
+            background: #30363d;
+            position: relative;
+            transition: background 0.2s;
+        }
+        #debug-pill::after {
+            content: '';
+            position: absolute;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #8b949e;
+            top: 3px;
+            left: 3px;
+            transition: transform 0.2s, background 0.2s;
+        }
+        #debug-toggle.on #debug-pill { background: #1f6feb; }
+        #debug-toggle.on #debug-pill::after { transform: translateX(14px); background: #fff; }
+    </style>
+</head>
+<body>
+<header>
+    NodeConnector Demo
+    <span>Click node to select · arrow keys to move · click output pin to connect · ESC to cancel</span>
+</header>
+<div id="canvas">
+    <div id="nodes-layer"></div>
+    <svg id="svg-canvas" xmlns="http://www.w3.org/2000/svg"></svg>
+</div>
+<div id="footer">
+    <div id="status">Click a node to select it, then use arrow keys to move it.</div>
+    <label id="debug-toggle">
+        Debug
+        <input type="checkbox" id="debug-checkbox">
+        <div id="debug-pill"></div>
+    </label>
+</div>
+
+<script type="module">
+import { NodeConnector } from './nodeConnector.js';
+
+const canvas     = document.getElementById('canvas');
+const nodesLayer = document.getElementById('nodes-layer');
+const svg        = /** @type {SVGSVGElement} */ (document.getElementById('svg-canvas'));
+const status     = document.getElementById('status');
+
+const connector = new NodeConnector(svg);
+connector.bridgeColor = '#0d1117';
+
+const debugToggle = document.getElementById('debug-toggle');
+const debugCheckbox = document.getElementById('debug-checkbox');
+debugCheckbox.addEventListener('change', () => {
+    connector.debug = debugCheckbox.checked;
+    debugToggle.classList.toggle('on', debugCheckbox.checked);
+    // Touch any node to trigger a redraw so debug circles appear/disappear immediately.
+    const [id, n] = nodeMap.entries().next().value;
+    connector.setNode(id, n.x, n.y, n.w, n.h);
+});
+
+// ── node map & selection ──────────────────────────────────────────────────────
+
+const nodeMap = new Map();
+let selected = null;
+
+function selectNode(id) {
+    if (selected) nodeMap.get(selected)?.el.classList.remove('selected');
+    selected = id;
+    if (id) {
+        nodeMap.get(id)?.el.classList.add('selected');
+        log(`Selected <b>${id}</b> — use arrow keys to move`);
+    }
+}
+
+// ── node factory ─────────────────────────────────────────────────────────────
+
+// ports: [{ key, label, side: 'input'|'output', relY }]
+function makeNode(id, title, x, y, ports) {
+    const W = 128;
+    const H = Math.max(60, 32 + ports.length * 16);
+
+    const el = document.createElement('div');
+    el.className = 'node';
+    el.style.cssText = `left:${x}px;top:${y}px;width:${W}px;height:${H}px;`;
+    el.dataset.node = id;
+
+    const header = document.createElement('div');
+    header.className = 'node-header';
+    header.textContent = title;
+    el.appendChild(header);
+
+    for (const p of ports) {
+        const label = document.createElement('div');
+        label.className = `node-label ${p.side}`;
+        label.style.top = `${p.relY - 7}px`;
+        label.textContent = p.label;
+        el.appendChild(label);
+    }
+
+    el.addEventListener('click', e => {
+        e.stopPropagation();
+        selectNode(id);
+    });
+
+    nodesLayer.appendChild(el);
+    connector.setNode(id, x, y, W, H);
+    for (const p of ports) {
+        if (p.side === 'input') connector.setInputPin(id, p.key, p.relY);
+        else                    connector.setOutputPin(id, p.key, p.relY);
+    }
+
+    const node = { id, x, y, w: W, h: H, el };
+    nodeMap.set(id, node);
+    return node;
+}
+
+// ── layout ────────────────────────────────────────────────────────────────────
+
+makeNode('entry',   'Entry Node',   32,    32, [
+    { key: 'out', label: 'out', side: 'output', relY: 16 }
+]);
+makeNode('logf',    'Log',  384,   208, [
+    { key: 'in',  label: 'in',  side: 'input',  relY: 16 },
+    { key: 'out', label: 'out', side: 'output', relY: 16 }
+]);
+makeNode('condition',  'Condition',      208,    32, [
+    { key: 'in', label: 'in', side: 'input',  relY: 16 },
+    { key: 't', label: 'true',  side: 'output', relY: 40 },
+    { key: 'f', label: 'false',  side: 'output', relY: 64 },
+]);
+makeNode('logt',    'Log',   384,  32, [
+    { key: 'in',  label: 'in',  side: 'input',  relY: 16 },
+    { key: 'out', label: 'out', side: 'output', relY: 42 },
+]);
+makeNode('transform', 'Transform', 560,  32, [
+    { key: 'in',  label: 'in',  side: 'input',  relY: 42 },
+    { key: 'out', label: 'out', side: 'output', relY: 42 },
+]);
+makeNode('report',    'Report',      736, 32, [{ key: 'in', label: 'in', side: 'input', relY: 16 }]);
+
+// ── initial connections ───────────────────────────────────────────────────────
+
+connector.connect('entry',     'out', 'condition',    'in');
+connector.connect('condition', 't', 'logt',      'in');
+connector.connect('condition', 'f', 'logf',      'in');
+connector.connect('logt',      'out', 'transform', 'in');
+connector.connect('transform', 'out', 'report',    'in');
+
+// ── interaction ───────────────────────────────────────────────────────────────
+
+let active = null; // output pin currently being wired
+
+connector.on('click', (pin) => {
+    if (active) {
+        if (pin.type === 'input') {
+            connector.connect(active.nodeId, active.key, pin.nodeId, pin.key);
+            log(`Connected <b>${active.nodeId}</b> → <b>${pin.nodeId}</b>`);
+            active = null;
+        } else {
+            active = pin;
+            connector.setPreviewPin(pin.nodeId, pin.key);
+            log(`Switched to <b>${pin.nodeId}</b> — click an input pin, or ESC to cancel`);
+        }
+    } else if (pin.type === 'output') {
+        active = pin;
+        connector.setPreviewPin(pin.nodeId, pin.key);
+        log(`Dragging from <b>${pin.nodeId}</b> — click an input pin to connect, or ESC to cancel`);
+    }
+});
+
+connector.on('connection-click', (srcId, srcKey, tgtId, tgtKey) => {
+    connector.disconnect(srcId, srcKey, tgtId, tgtKey);
+    log(`Removed connection <b>${srcId}</b> → <b>${tgtId}</b>`);
+});
+
+// Canvas background click: deselect node and/or cancel preview.
+// Node clicks are stopPropagation'd so they never reach here.
+canvas.addEventListener('click', e => {
+    if (selected) selectNode(null);
+    if (!(e.target instanceof SVGCircleElement) && active) {
+        active = null;
+        log('Cancelled. Click an output pin to begin.');
+    }
+});
+
+document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') {
+        if (active) { active = null; log('Cancelled.'); }
+        if (selected) selectNode(null);
+        return;
+    }
+
+    const STEP = 16;
+    const moves = { ArrowLeft: [-STEP, 0], ArrowRight: [STEP, 0], ArrowUp: [0, -STEP], ArrowDown: [0, STEP] };
+    if (selected && moves[e.key]) {
+        e.preventDefault();
+        const n = nodeMap.get(selected);
+        const [dx, dy] = moves[e.key];
+        n.x += dx;
+        n.y += dy;
+        n.el.style.left = `${n.x}px`;
+        n.el.style.top = `${n.y}px`;
+        connector.setNode(n.id, n.x, n.y, n.w, n.h);
+    }
+});
+
+function log(html) { status.innerHTML = html; }
+</script>
+</body>
+</html>
