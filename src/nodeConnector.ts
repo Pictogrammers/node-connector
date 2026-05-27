@@ -23,6 +23,7 @@ interface ConnectionData {
     path: SVGPathElement;
     hitZone: SVGPathElement;
     isInvalid: boolean;
+    cleanupHover: () => void;
 }
 
 interface PinElement {
@@ -95,6 +96,7 @@ export class NodeConnector {
             c.sourceNodeId === nodeId || c.targetNodeId === nodeId
         );
         for (const conn of toRemove) {
+            conn.cleanupHover();
             conn.path.remove();
             conn.hitZone.remove();
         }
@@ -139,7 +141,8 @@ export class NodeConnector {
             this.pathGroup.appendChild(path);
         });
         const connData: ConnectionData = {
-            sourceNodeId, sourceKey, targetNodeId, targetKey, path, hitZone, isInvalid: false
+            sourceNodeId, sourceKey, targetNodeId, targetKey, path, hitZone, isInvalid: false,
+            cleanupHover: () => { hoverMarker?.remove(); hoverMarker = null; },
         };
         hitZone.addEventListener('mouseleave', () => {
             path.setAttribute('stroke', connData.isInvalid ? this.pathInvalidColor : this.pathColor);
@@ -166,6 +169,7 @@ export class NodeConnector {
         );
         if (idx === -1) return;
         const [conn] = this.connections.splice(idx, 1);
+        conn.cleanupHover();
         conn.path.remove();
         conn.hitZone.remove();
         this.redrawPaths();
@@ -297,6 +301,7 @@ export class NodeConnector {
                 : c.targetNodeId === nodeId && c.targetKey === key
         );
         for (const conn of toRemove) {
+            conn.cleanupHover();
             conn.path.remove();
             conn.hitZone.remove();
         }
