@@ -329,6 +329,7 @@ export class NodeConnector {
     private redrawPaths(): void {
         const allPts = this.connections.map(conn => this.computeWaypoints(conn));
         this.nudgeHorizontalSegments(allPts);
+        this.nudgeVerticalSegments(allPts);
         this.debugGroup.replaceChildren();
         for (let i = 0; i < this.connections.length; i++) {
             const conn = this.connections[i];
@@ -567,6 +568,80 @@ export class NodeConnector {
         }
     }
 
+    // Offsets overlapping co-linear vertical segments so they don't draw on top of each other.
+    private nudgeVerticalSegments(allPts: number[][][]): void {
+        const nudgeStep = 4;
+
+        for (const node of this.nodes.values()) {
+            for (const isLeft of [true, false]) {
+                const segX = isLeft
+                    ? node.x - ROUTE_PAD
+                    : node.x + node.width + ROUTE_PAD;
+
+                type ConnSeg = { c: number; runStart: number; runEnd: number; y1: number; y2: number };
+                const connSegs: ConnSeg[] = [];
+                for (let c = 0; c < allPts.length; c++) {
+                    if (this.connections[c].isInvalid) continue;
+                    const pts = allPts[c];
+                    for (let i = 0; i + 1 < pts.length; i++) {
+                        if (pts[i][0] === segX && pts[i + 1][0] === segX) {
+                            let runStart = i;
+                            while (runStart > 0 && pts[runStart - 1][0] === segX) runStart--;
+                            let runEnd = i + 1;
+                            while (runEnd < pts.length - 1 && pts[runEnd + 1][0] === segX) runEnd++;
+                            let y1 = pts[runStart][1], y2 = y1;
+                            for (let j = runStart + 1; j <= runEnd; j++) {
+                                if (pts[j][1] < y1) y1 = pts[j][1];
+                                if (pts[j][1] > y2) y2 = pts[j][1];
+                            }
+                            connSegs.push({ c, runStart, runEnd, y1, y2 });
+                            break;
+                        }
+                    }
+                }
+                if (connSegs.length < 2) continue;
+
+                const overlapping = connSegs.filter((cs, k) =>
+                    connSegs.some((other, j) => j !== k && cs.y1 < other.y2 && other.y1 < cs.y2)
+                );
+                if (overlapping.length < 2) continue;
+
+                const pathLen = (c: number) => {
+                    const p = allPts[c];
+                    let d = 0;
+                    for (let i = 1; i < p.length; i++) {
+                        const dx = p[i][0] - p[i-1][0], dy = p[i][1] - p[i-1][1];
+                        d += Math.sqrt(dx*dx + dy*dy);
+                    }
+                    return d;
+                };
+                overlapping.sort((a, b) => pathLen(a.c) - pathLen(b.c));
+
+                for (let k = 0; k < overlapping.length; k++) {
+                    const delta = isLeft ? -k * nudgeStep : k * nudgeStep;
+                    if (!delta) continue;
+                    const { c, runStart, runEnd } = overlapping[k];
+                    const pts = allPts[c];
+                    for (let j = runStart; j <= runEnd; j++) pts[j][0] += delta;
+                    // Spread outermost Y so approach and descent curves also separate,
+                    // but clamp so neither end overshoots its neighbour.
+                    const goingDown = pts[runStart][1] <= pts[runEnd][1];
+                    if (goingDown) {
+                        pts[runStart][1] -= Math.abs(delta);
+                        pts[runEnd][1]   += Math.abs(delta);
+                        if (runStart > 0)              pts[runStart][1] = Math.max(pts[runStart][1], pts[runStart - 1][1]);
+                        if (runEnd < pts.length - 1)   pts[runEnd][1]   = Math.min(pts[runEnd][1],   pts[runEnd   + 1][1]);
+                    } else {
+                        pts[runStart][1] += Math.abs(delta);
+                        pts[runEnd][1]   -= Math.abs(delta);
+                        if (runStart > 0)              pts[runStart][1] = Math.min(pts[runStart][1], pts[runStart - 1][1]);
+                        if (runEnd < pts.length - 1)   pts[runEnd][1]   = Math.max(pts[runEnd][1],   pts[runEnd   + 1][1]);
+                    }
+                }
+            }
+        }
+    }
+
     private applyPathPoints(conn: ConnectionData, pts: number[][]): void {
         if (!pts.length) return;
         let d: string;
@@ -576,6 +651,7 @@ export class NodeConnector {
             const R = 8;
             d = `M ${pts[0][0]} ${pts[0][1]}`;
             let px = pts[0][0], py = pts[0][1];
+            let prevWasCorner = false;
             for (let i = 1; i < pts.length; i++) {
                 const [bx, by] = pts[i];
                 let segEndX = bx, segEndY = by;
@@ -605,13 +681,26 @@ export class NodeConnector {
                 }
                 const sdx = segEndX - px, sdy = segEndY - py;
                 if (Math.abs(sdx) < 15 && Math.abs(sdy) > 15) {
-                    // Nearly vertical: straight line with 4px quadratic arcs at each end.
+                    // Nearly vertical: straight line with small arcs at each end.
+                    // When arriving from a corner (prevWasCorner), the corner Q already
+                    // departed vertically — use a line to preserve that tangent instead of
+                    // a Q that would introduce a horizontal kink.
+                    // When departing into a corner (hasCorner), the corner Q expects a
+                    // vertical arrival tangent — again use a line rather than a Q.
                     const vx = (px + segEndX) / 2;
                     const sign = sdy > 0 ? 1 : -1;
                     const r = Math.min(4, Math.abs(sdy) / 4);
-                    d += ` Q ${vx} ${py} ${vx} ${py + sign * r}`;
+                    if (prevWasCorner) {
+                        d += ` L ${vx} ${py + sign * r}`;
+                    } else {
+                        d += ` Q ${vx} ${py} ${vx} ${py + sign * r}`;
+                    }
                     if (Math.abs(sdy) > r * 2) d += ` L ${vx} ${segEndY - sign * r}`;
-                    d += ` Q ${vx} ${segEndY} ${segEndX} ${segEndY}`;
+                    if (hasCorner) {
+                        d += ` L ${segEndX} ${segEndY}`;
+                    } else {
+                        d += ` Q ${vx} ${segEndY} ${segEndX} ${segEndY}`;
+                    }
                 } else {
                     const midX = (px + segEndX) / 2;
                     d += ` C ${midX} ${py} ${midX} ${segEndY} ${segEndX} ${segEndY}`;
@@ -621,6 +710,7 @@ export class NodeConnector {
                 }
                 px = hasCorner ? cornerEndX : bx;
                 py = hasCorner ? cornerEndY : by;
+                prevWasCorner = hasCorner;
                 if (this.debug && i < pts.length - 1) {
                     const dot = document.createElementNS(SVG_NS, 'circle');
                     dot.setAttribute('cx', String(bx));
