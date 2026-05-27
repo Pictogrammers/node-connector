@@ -556,9 +556,12 @@ export class NodeConnector {
                     const { c, runLeft, runRight } = overlapping[k];
                     const pts = allPts[c];
                     for (let j = runLeft; j <= runRight; j++) pts[j][1] += delta;
-                    // Spread outermost X so approach and descent curves also separate.
+                    // Spread outermost X so approach and descent curves also separate,
+                    // but clamp so neither end backtracks past its neighbour.
                     pts[runLeft][0]  -= Math.abs(delta);
                     pts[runRight][0] += Math.abs(delta);
+                    if (runLeft > 0)              pts[runLeft][0]  = Math.max(pts[runLeft][0],  pts[runLeft  - 1][0]);
+                    if (runRight < pts.length - 1) pts[runRight][0] = Math.min(pts[runRight][0], pts[runRight + 1][0]);
                 }
             }
         }
