@@ -60,6 +60,8 @@ export class NodeConnector {
     private pins: PinElement[] = [];
     private bridges: SVGLineElement[] = [];
     private connGroup: SVGGElement;
+    private pathGroup: SVGGElement;
+    private hitGroup: SVGGElement;
     private pinGroup: SVGGElement;
     private debugGroup: SVGGElement;
     private previewPath: SVGPathElement | null = null;
@@ -72,8 +74,12 @@ export class NodeConnector {
 
     constructor(private svg: SVGSVGElement) {
         this.connGroup  = document.createElementNS(SVG_NS, 'g');
+        this.pathGroup  = document.createElementNS(SVG_NS, 'g');
+        this.hitGroup   = document.createElementNS(SVG_NS, 'g');
         this.pinGroup   = document.createElementNS(SVG_NS, 'g');
         this.debugGroup = document.createElementNS(SVG_NS, 'g');
+        this.connGroup.appendChild(this.pathGroup);
+        this.connGroup.appendChild(this.hitGroup);
         svg.appendChild(this.connGroup);
         svg.appendChild(this.pinGroup);
     }
@@ -124,9 +130,13 @@ export class NodeConnector {
 
         const path = this.newPath(false);
         const hitZone = this.newHitZone();
+        let hoverMarker: SVGGElement | null = null;
         hitZone.addEventListener('mouseenter', () => {
             path.setAttribute('stroke', this.pathColorHover);
             path.setAttribute('stroke-width', '3');
+            hoverMarker = document.createElementNS(SVG_NS, 'g');
+            this.pathGroup.insertBefore(hoverMarker, path);
+            this.pathGroup.appendChild(path);
         });
         const connData: ConnectionData = {
             sourceNodeId, sourceKey, targetNodeId, targetKey, path, hitZone, isInvalid: false
@@ -134,12 +144,17 @@ export class NodeConnector {
         hitZone.addEventListener('mouseleave', () => {
             path.setAttribute('stroke', connData.isInvalid ? this.pathInvalidColor : this.pathColor);
             path.setAttribute('stroke-width', '2');
+            if (hoverMarker) {
+                this.pathGroup.insertBefore(path, hoverMarker);
+                hoverMarker.remove();
+                hoverMarker = null;
+            }
         });
         hitZone.addEventListener('click', () => {
             this.emit('connection-click', sourceNodeId, sourceKey, targetNodeId, targetKey);
         });
-        this.connGroup.appendChild(path);
-        this.connGroup.appendChild(hitZone);
+        this.pathGroup.appendChild(path);
+        this.hitGroup.appendChild(hitZone);
         this.connections.push(connData);
         this.redrawPaths();
     }
@@ -711,7 +726,7 @@ export class NodeConnector {
                     el.setAttribute('stroke-width', '4');
                     el.setAttribute('stroke-opacity', '0.8');
                     el.setAttribute('stroke-linecap', 'round');
-                    this.connGroup.insertBefore(el, this.connections[b].path);
+                    this.pathGroup.insertBefore(el, this.connections[b].path);
                     this.bridges.push(el);
                 }
             }
@@ -738,6 +753,7 @@ export class NodeConnector {
         p.setAttribute('fill', 'none');
         p.setAttribute('stroke', this.pathColor);
         p.setAttribute('stroke-width', '2');
+        p.setAttribute('pointer-events', 'none');
         if (dashed) p.setAttribute('stroke-dasharray', '6 3');
         return p;
     }
