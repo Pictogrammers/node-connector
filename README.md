@@ -75,7 +75,7 @@ Registers or updates a node's bounding box. Call this whenever a node is created
 | `width`, `height` | `number` | Size of the node rectangle |
 
 ```ts
-connector.setNode('uuid1', 320, 115, 152, 86);
+connector.setNode('uuid1', 32, 32, 128, 64);
 ```
 
 Moving a node:
