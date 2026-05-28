@@ -643,18 +643,32 @@ export class NodeConnector {
         conn.hitZone.setAttribute('d', d);
     }
 
-    // Catmull-Rom to cubic bezier: returns [cp1, cp2] for segment pts[i] → pts[i+1].
-    // Phantom points at the ends mirror the first/last real segment so the spline
-    // departs and arrives tangent to the stub direction (horizontal).
+    // Centripetal Catmull-Rom → cubic bezier control points for segment pts[i] → pts[i+1].
+    // Knot spacing proportional to √(chord length) (alpha = 0.5) prevents overshooting
+    // when adjacent segments differ greatly in length — e.g. an 8px stub next to a
+    // 300px diagonal would cause the standard (uniform) variant to swing far outside
+    // the segment bounding box.
+    // Phantom points at the ends mirror the first/last segment to force horizontal
+    // tangents at source and target pins.
     private catmullCP(pts: number[][], i: number): [[number, number], [number, number]] {
         const n = pts.length;
-        const p0 = i > 0 ? pts[i - 1] : [2*pts[0][0] - pts[1][0], 2*pts[0][1] - pts[1][1]];
+        const p0 = i > 0 ? pts[i-1] : [2*pts[0][0]-pts[1][0], 2*pts[0][1]-pts[1][1]];
         const p1 = pts[i];
-        const p2 = pts[i + 1];
-        const p3 = i < n - 2 ? pts[i + 2] : [2*pts[n-1][0] - pts[n-2][0], 2*pts[n-1][1] - pts[n-2][1]];
+        const p2 = pts[i+1];
+        const p3 = i < n-2 ? pts[i+2] : [2*pts[n-1][0]-pts[n-2][0], 2*pts[n-1][1]-pts[n-2][1]];
+
+        const d01 = Math.sqrt(Math.hypot(p1[0]-p0[0], p1[1]-p0[1])) || 1e-4;
+        const d12 = Math.sqrt(Math.hypot(p2[0]-p1[0], p2[1]-p1[1])) || 1e-4;
+        const d23 = Math.sqrt(Math.hypot(p3[0]-p2[0], p3[1]-p2[1])) || 1e-4;
+
+        const T1x = (p2[0]-p1[0])/d12 - (p2[0]-p0[0])/(d01+d12) + (p1[0]-p0[0])/d01;
+        const T1y = (p2[1]-p1[1])/d12 - (p2[1]-p0[1])/(d01+d12) + (p1[1]-p0[1])/d01;
+        const T2x = (p3[0]-p2[0])/d23 - (p3[0]-p1[0])/(d12+d23) + (p2[0]-p1[0])/d12;
+        const T2y = (p3[1]-p2[1])/d23 - (p3[1]-p1[1])/(d12+d23) + (p2[1]-p1[1])/d12;
+
         return [
-            [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6],
-            [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6],
+            [p1[0] + T1x*d12/3, p1[1] + T1y*d12/3],
+            [p2[0] - T2x*d12/3, p2[1] - T2y*d12/3],
         ];
     }
 
