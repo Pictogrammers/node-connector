@@ -1,6 +1,8 @@
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const PIN_RADIUS = 5;
-const ROUTE_PAD = 5; // minimum clearance around node rectangles when routing
+const ROUTE_PAD  = 5;  // minimum clearance around node rectangles when routing
+const STUB       = 8;  // departure/arrival pin stub length (half grid)
+const NUDGE_STEP = 8;  // lane separation for overlapping parallel segments (half grid)
 
 export interface Pin {
     nodeId: string;
@@ -355,7 +357,6 @@ export class NodeConnector {
             .filter(([id]) => id !== conn.sourceNodeId && id !== conn.targetNodeId)
             .map(([, n]) => n);
         if (ex >= sx) {
-            const STUB = 8;
             const routed = this.buildWaypoints(sx, sy, ex, ey, avoid);
             // Always insert an end stub so the path arrives at the input pin from the left.
             // When routing goes via an obstacle's right edge (prevX > ex), the path would
@@ -388,7 +389,6 @@ export class NodeConnector {
 
     // Iteratively inserts waypoints at the edges of blocking nodes until no segment intersects one.
     private buildWaypoints(sx: number, sy: number, ex: number, ey: number, avoid: NodeData[]): number[][] {
-        const STUB = 8;
         let pts: number[][] = [[sx, sy], [sx + STUB, sy], [ex, ey]];
         for (let iter = 0; iter < 50; iter++) {
             let changed = false;
@@ -469,7 +469,7 @@ export class NodeConnector {
         if (Math.max(ay, by) <= ry || Math.min(ay, by) >= rb) return false;
         const midX = (ax + bx) / 2;
         const p0 = [ax, ay], p1 = [midX, ay], p2 = [midX, by], p3 = [bx, by];
-        const steps = Math.max(50, Math.ceil((bx - ax) / 4));
+        const steps = Math.max(50, Math.ceil(Math.hypot(bx - ax, by - ay) / 4));
         for (let i = 0; i <= steps; i++) {
             const [px, py] = this.cubicPt(p0, p1, p2, p3, i / steps);
             if (px > rx && px < rr && py > ry && py < rb) return true;
@@ -487,8 +487,6 @@ export class NodeConnector {
 
     // Offsets overlapping co-linear horizontal segments so they don't draw on top of each other.
     private nudgeHorizontalSegments(allPts: number[][][]): void {
-        const nudgeStep = 4;
-
         for (const node of this.nodes.values()) {
             for (const isAbove of [true, false]) {
                 const segY = isAbove
@@ -533,16 +531,7 @@ export class NodeConnector {
                 // Above: larger source Y → inner (path approaches from further below → gentler arc → inner).
                 // Below: smaller source Y → inner (path approaches from further above → gentler arc → inner).
                 // Tiebreaker: shorter path → inner.
-                const pathLen = (c: number) => {
-                    const p = allPts[c];
-                    let d = 0;
-                    for (let i = 1; i < p.length; i++) {
-                        const dx = p[i][0] - p[i-1][0], dy = p[i][1] - p[i-1][1];
-                        d += Math.sqrt(dx*dx + dy*dy);
-                    }
-                    return d;
-                };
-                const lengths = new Map(overlapping.map(cs => [cs.c, pathLen(cs.c)]));
+                const lengths = new Map(overlapping.map(cs => [cs.c, this.pathLength(allPts[cs.c])]));
                 overlapping.sort((a, b) => {
                     const aY = allPts[a.c][0][1], bY = allPts[b.c][0][1];
                     const yDiff = isAbove ? bY - aY : aY - bY;
@@ -552,7 +541,7 @@ export class NodeConnector {
 
                 // Apply per-lane offsets: index 0 stays at segY, outer lanes spread away.
                 for (let k = 0; k < overlapping.length; k++) {
-                    const delta = isAbove ? -k * nudgeStep : k * nudgeStep;
+                    const delta = isAbove ? -k * NUDGE_STEP : k * NUDGE_STEP;
                     if (!delta) continue;
                     const { c, runLeft, runRight } = overlapping[k];
                     const pts = allPts[c];
@@ -570,8 +559,6 @@ export class NodeConnector {
 
     // Offsets overlapping co-linear vertical segments so they don't draw on top of each other.
     private nudgeVerticalSegments(allPts: number[][][]): void {
-        const nudgeStep = 4;
-
         for (const node of this.nodes.values()) {
             for (const isLeft of [true, false]) {
                 const segX = isLeft
@@ -606,19 +593,10 @@ export class NodeConnector {
                 );
                 if (overlapping.length < 2) continue;
 
-                const pathLen = (c: number) => {
-                    const p = allPts[c];
-                    let d = 0;
-                    for (let i = 1; i < p.length; i++) {
-                        const dx = p[i][0] - p[i-1][0], dy = p[i][1] - p[i-1][1];
-                        d += Math.sqrt(dx*dx + dy*dy);
-                    }
-                    return d;
-                };
-                overlapping.sort((a, b) => pathLen(a.c) - pathLen(b.c));
+                overlapping.sort((a, b) => this.pathLength(allPts[a.c]) - this.pathLength(allPts[b.c]));
 
                 for (let k = 0; k < overlapping.length; k++) {
-                    const delta = isLeft ? -k * nudgeStep : k * nudgeStep;
+                    const delta = isLeft ? -k * NUDGE_STEP : k * NUDGE_STEP;
                     if (!delta) continue;
                     const { c, runStart, runEnd } = overlapping[k];
                     const pts = allPts[c];
@@ -648,73 +626,12 @@ export class NodeConnector {
         if (conn.isInvalid) {
             d = `M ${pts[0][0]} ${pts[0][1]} L ${pts[pts.length - 1][0]} ${pts[pts.length - 1][1]}`;
         } else {
-            const R = 8;
-            d = `M ${pts[0][0]} ${pts[0][1]}`;
-            let px = pts[0][0], py = pts[0][1];
-            let prevWasCorner = false;
-            for (let i = 1; i < pts.length; i++) {
-                const [bx, by] = pts[i];
-                let segEndX = bx, segEndY = by;
-                let cornerEndX = bx, cornerEndY = by;
-                let hasCorner = false;
-                if (i < pts.length - 1) {
-                    const [ax, ay] = pts[i - 1];
-                    const [nx, ny] = pts[i + 1];
-                    const inLen = Math.hypot(bx - ax, by - ay);
-                    const outLen = Math.hypot(nx - bx, ny - by);
-                    if (inLen > 0 && outLen > 0) {
-                        const inDx = (bx - ax) / inLen, inDy = (by - ay) / inLen;
-                        const outDx = (nx - bx) / outLen, outDy = (ny - by) / outLen;
-                        // Only round corners between axis-aligned segments (routing waypoints
-                        // are always H/V; diagonal S-curves are already smooth via midX bezier).
-                        const inH = Math.abs(inDy) < 0.01, inV = Math.abs(inDx) < 0.01;
-                        const outH = Math.abs(outDy) < 0.01, outV = Math.abs(outDx) < 0.01;
-                        if ((inH || inV) && (outH || outV) && inDx * outDx + inDy * outDy < 0.99) {
-                            const trim = Math.min(R, inLen / 2, outLen / 2);
-                            segEndX = bx - inDx * trim;
-                            segEndY = by - inDy * trim;
-                            cornerEndX = bx + outDx * trim;
-                            cornerEndY = by + outDy * trim;
-                            hasCorner = true;
-                        }
-                    }
-                }
-                const sdx = segEndX - px, sdy = segEndY - py;
-                if (Math.abs(sdx) < 15 && Math.abs(sdy) > 15) {
-                    // Nearly vertical: straight line with small arcs at each end.
-                    // When arriving from a corner (prevWasCorner), the corner Q already
-                    // departed vertically — use a line to preserve that tangent instead of
-                    // a Q that would introduce a horizontal kink.
-                    // When departing into a corner (hasCorner), the corner Q expects a
-                    // vertical arrival tangent — again use a line rather than a Q.
-                    const vx = (px + segEndX) / 2;
-                    const sign = sdy > 0 ? 1 : -1;
-                    const r = Math.min(4, Math.abs(sdy) / 4);
-                    if (prevWasCorner) {
-                        d += ` L ${vx} ${py + sign * r}`;
-                    } else {
-                        d += ` Q ${vx} ${py} ${vx} ${py + sign * r}`;
-                    }
-                    if (Math.abs(sdy) > r * 2) d += ` L ${vx} ${segEndY - sign * r}`;
-                    if (hasCorner) {
-                        d += ` L ${segEndX} ${segEndY}`;
-                    } else {
-                        d += ` Q ${vx} ${segEndY} ${segEndX} ${segEndY}`;
-                    }
-                } else {
-                    const midX = (px + segEndX) / 2;
-                    d += ` C ${midX} ${py} ${midX} ${segEndY} ${segEndX} ${segEndY}`;
-                }
-                if (hasCorner) {
-                    d += ` Q ${bx} ${by} ${cornerEndX} ${cornerEndY}`;
-                }
-                px = hasCorner ? cornerEndX : bx;
-                py = hasCorner ? cornerEndY : by;
-                prevWasCorner = hasCorner;
-                if (this.debug && i < pts.length - 1) {
+            d = this.buildSmoothPath(pts);
+            if (this.debug) {
+                for (let i = 1; i < pts.length - 1; i++) {
                     const dot = document.createElementNS(SVG_NS, 'circle');
-                    dot.setAttribute('cx', String(bx));
-                    dot.setAttribute('cy', String(by));
+                    dot.setAttribute('cx', String(pts[i][0]));
+                    dot.setAttribute('cy', String(pts[i][1]));
                     dot.setAttribute('r', '2');
                     dot.setAttribute('fill', 'red');
                     dot.setAttribute('pointer-events', 'none');
@@ -726,6 +643,40 @@ export class NodeConnector {
         conn.hitZone.setAttribute('d', d);
     }
 
+    // Catmull-Rom to cubic bezier: returns [cp1, cp2] for segment pts[i] → pts[i+1].
+    // Phantom points at the ends mirror the first/last real segment so the spline
+    // departs and arrives tangent to the stub direction (horizontal).
+    private catmullCP(pts: number[][], i: number): [[number, number], [number, number]] {
+        const n = pts.length;
+        const p0 = i > 0 ? pts[i - 1] : [2*pts[0][0] - pts[1][0], 2*pts[0][1] - pts[1][1]];
+        const p1 = pts[i];
+        const p2 = pts[i + 1];
+        const p3 = i < n - 2 ? pts[i + 2] : [2*pts[n-1][0] - pts[n-2][0], 2*pts[n-1][1] - pts[n-2][1]];
+        return [
+            [p1[0] + (p2[0] - p0[0]) / 6, p1[1] + (p2[1] - p0[1]) / 6],
+            [p2[0] - (p3[0] - p1[0]) / 6, p2[1] - (p3[1] - p1[1]) / 6],
+        ];
+    }
+
+    // Builds a Catmull-Rom spline through all waypoints as a series of cubic beziers.
+    private buildSmoothPath(pts: number[][]): string {
+        let d = `M ${pts[0][0]} ${pts[0][1]}`;
+        for (let i = 0; i < pts.length - 1; i++) {
+            const [[cp1x, cp1y], [cp2x, cp2y]] = this.catmullCP(pts, i);
+            d += ` C ${cp1x} ${cp1y} ${cp2x} ${cp2y} ${pts[i+1][0]} ${pts[i+1][1]}`;
+        }
+        return d;
+    }
+
+    private pathLength(pts: number[][]): number {
+        let len = 0;
+        for (let i = 1; i < pts.length; i++) {
+            const dx = pts[i][0] - pts[i-1][0], dy = pts[i][1] - pts[i-1][1];
+            len += Math.sqrt(dx*dx + dy*dy);
+        }
+        return len;
+    }
+
     private samplePathPts(pts: number[][], n: number): { x: number; y: number; t: number }[] {
         const segs = pts.length - 1;
         const out: { x: number; y: number; t: number }[] = [];
@@ -734,9 +685,8 @@ export class NodeConnector {
             const sf = Math.min(gT * segs, segs - 1e-9);
             const si = Math.floor(sf);
             const lt = sf - si;
-            const [ax, ay] = pts[si], [bx, by] = pts[si + 1];
-            const mx = (ax + bx) / 2;
-            const [x, y] = this.cubicPt([ax, ay], [mx, ay], [mx, by], [bx, by], lt);
+            const [[cp1x, cp1y], [cp2x, cp2y]] = this.catmullCP(pts, si);
+            const [x, y] = this.cubicPt(pts[si], [cp1x, cp1y], [cp2x, cp2y], pts[si + 1], lt);
             out.push({ x, y, t: gT });
         }
         return out;
@@ -774,12 +724,11 @@ export class NodeConnector {
         const sf = Math.min(t * segs, segs - 1e-9);
         const si = Math.floor(sf);
         const lt = sf - si;
-        const [ax, ay] = pts[si], [bx, by] = pts[si + 1];
-        const mx = (ax + bx) / 2;
-        const p0 = [ax, ay], p1 = [mx, ay], p2 = [mx, by], p3 = [bx, by];
+        const p1 = pts[si], p3 = pts[si + 1];
+        const [[cp1x, cp1y], [cp2x, cp2y]] = this.catmullCP(pts, si);
         const m = 1 - lt;
-        const dx = 3 * (m*m*(p1[0]-p0[0]) + 2*m*lt*(p2[0]-p1[0]) + lt*lt*(p3[0]-p2[0]));
-        const dy = 3 * (m*m*(p1[1]-p0[1]) + 2*m*lt*(p2[1]-p1[1]) + lt*lt*(p3[1]-p2[1]));
+        const dx = 3 * (m*m*(cp1x-p1[0]) + 2*m*lt*(cp2x-cp1x) + lt*lt*(p3[0]-cp2x));
+        const dy = 3 * (m*m*(cp1y-p1[1]) + 2*m*lt*(cp2y-cp1y) + lt*lt*(p3[1]-cp2y));
         const len = Math.sqrt(dx*dx + dy*dy) || 1;
         return [dx/len, dy/len];
     }
