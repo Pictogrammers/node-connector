@@ -3,6 +3,7 @@ const PIN_RADIUS = 5;
 const ROUTE_PAD  = 5;  // minimum clearance around node rectangles when routing
 const STUB       = 8;  // departure/arrival pin stub length (half grid)
 const NUDGE_STEP = 8;  // lane separation for overlapping parallel segments (half grid)
+const CORNER_R   = 8;  // corner rounding radius at routing waypoints (half grid)
 
 export interface Pin {
     nodeId: string;
@@ -643,42 +644,26 @@ export class NodeConnector {
         conn.hitZone.setAttribute('d', d);
     }
 
-    // Centripetal Catmull-Rom → cubic bezier control points for segment pts[i] → pts[i+1].
-    // Knot spacing proportional to √(chord length) (alpha = 0.5) prevents overshooting
-    // when adjacent segments differ greatly in length — e.g. an 8px stub next to a
-    // 300px diagonal would cause the standard (uniform) variant to swing far outside
-    // the segment bounding box.
-    // Phantom points at the ends mirror the first/last segment to force horizontal
-    // tangents at source and target pins.
-    private catmullCP(pts: number[][], i: number): [[number, number], [number, number]] {
-        const n = pts.length;
-        const p0 = i > 0 ? pts[i-1] : [2*pts[0][0]-pts[1][0], 2*pts[0][1]-pts[1][1]];
-        const p1 = pts[i];
-        const p2 = pts[i+1];
-        const p3 = i < n-2 ? pts[i+2] : [2*pts[n-1][0]-pts[n-2][0], 2*pts[n-1][1]-pts[n-2][1]];
-
-        const d01 = Math.sqrt(Math.hypot(p1[0]-p0[0], p1[1]-p0[1])) || 1e-4;
-        const d12 = Math.sqrt(Math.hypot(p2[0]-p1[0], p2[1]-p1[1])) || 1e-4;
-        const d23 = Math.sqrt(Math.hypot(p3[0]-p2[0], p3[1]-p2[1])) || 1e-4;
-
-        const T1x = (p2[0]-p1[0])/d12 - (p2[0]-p0[0])/(d01+d12) + (p1[0]-p0[0])/d01;
-        const T1y = (p2[1]-p1[1])/d12 - (p2[1]-p0[1])/(d01+d12) + (p1[1]-p0[1])/d01;
-        const T2x = (p3[0]-p2[0])/d23 - (p3[0]-p1[0])/(d12+d23) + (p2[0]-p1[0])/d12;
-        const T2y = (p3[1]-p2[1])/d23 - (p3[1]-p1[1])/(d12+d23) + (p2[1]-p1[1])/d12;
-
-        return [
-            [p1[0] + T1x*d12/3, p1[1] + T1y*d12/3],
-            [p2[0] - T2x*d12/3, p2[1] - T2y*d12/3],
-        ];
-    }
-
-    // Builds a Catmull-Rom spline through all waypoints as a series of cubic beziers.
+    // Straight polyline segments with quadratic bezier rounding only at each bend.
+    // Keeps horizontal/vertical routing segments intact while smoothing corners.
     private buildSmoothPath(pts: number[][]): string {
+        if (pts.length < 2) return '';
         let d = `M ${pts[0][0]} ${pts[0][1]}`;
-        for (let i = 0; i < pts.length - 1; i++) {
-            const [[cp1x, cp1y], [cp2x, cp2y]] = this.catmullCP(pts, i);
-            d += ` C ${cp1x} ${cp1y} ${cp2x} ${cp2y} ${pts[i+1][0]} ${pts[i+1][1]}`;
+        for (let i = 1; i < pts.length - 1; i++) {
+            const [px, py] = pts[i - 1];
+            const [cx, cy] = pts[i];
+            const [nx, ny] = pts[i + 1];
+            const inDx = cx - px, inDy = cy - py;
+            const inLen = Math.sqrt(inDx * inDx + inDy * inDy);
+            const outDx = nx - cx, outDy = ny - cy;
+            const outLen = Math.sqrt(outDx * outDx + outDy * outDy);
+            if (inLen < 1e-6 || outLen < 1e-6) { d += ` L ${cx} ${cy}`; continue; }
+            const r = Math.min(CORNER_R, inLen / 2, outLen / 2);
+            const ex = cx - (inDx / inLen) * r, ey = cy - (inDy / inLen) * r;
+            const fx = cx + (outDx / outLen) * r, fy = cy + (outDy / outLen) * r;
+            d += ` L ${ex} ${ey} Q ${cx} ${cy} ${fx} ${fy}`;
         }
+        d += ` L ${pts[pts.length - 1][0]} ${pts[pts.length - 1][1]}`;
         return d;
     }
 
@@ -699,8 +684,8 @@ export class NodeConnector {
             const sf = Math.min(gT * segs, segs - 1e-9);
             const si = Math.floor(sf);
             const lt = sf - si;
-            const [[cp1x, cp1y], [cp2x, cp2y]] = this.catmullCP(pts, si);
-            const [x, y] = this.cubicPt(pts[si], [cp1x, cp1y], [cp2x, cp2y], pts[si + 1], lt);
+            const x = pts[si][0] + lt * (pts[si + 1][0] - pts[si][0]);
+            const y = pts[si][1] + lt * (pts[si + 1][1] - pts[si][1]);
             out.push({ x, y, t: gT });
         }
         return out;
@@ -737,14 +722,10 @@ export class NodeConnector {
         const segs = pts.length - 1;
         const sf = Math.min(t * segs, segs - 1e-9);
         const si = Math.floor(sf);
-        const lt = sf - si;
-        const p1 = pts[si], p3 = pts[si + 1];
-        const [[cp1x, cp1y], [cp2x, cp2y]] = this.catmullCP(pts, si);
-        const m = 1 - lt;
-        const dx = 3 * (m*m*(cp1x-p1[0]) + 2*m*lt*(cp2x-cp1x) + lt*lt*(p3[0]-cp2x));
-        const dy = 3 * (m*m*(cp1y-p1[1]) + 2*m*lt*(cp2y-cp1y) + lt*lt*(p3[1]-cp2y));
-        const len = Math.sqrt(dx*dx + dy*dy) || 1;
-        return [dx/len, dy/len];
+        const dx = pts[si + 1][0] - pts[si][0];
+        const dy = pts[si + 1][1] - pts[si][1];
+        const len = Math.sqrt(dx * dx + dy * dy) || 1;
+        return [dx / len, dy / len];
     }
 
     private drawBridges(allPts: number[][][]): void {
