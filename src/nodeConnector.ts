@@ -547,12 +547,9 @@ export class NodeConnector {
                     const { c, runLeft, runRight } = overlapping[k];
                     const pts = allPts[c];
                     for (let j = runLeft; j <= runRight; j++) pts[j][1] += delta;
-                    // Spread outermost X so approach and descent curves also separate,
-                    // but clamp so neither end backtracks past its neighbour.
-                    pts[runLeft][0]  -= Math.abs(delta);
-                    pts[runRight][0] += Math.abs(delta);
-                    if (runLeft > 0)              pts[runLeft][0]  = Math.max(pts[runLeft][0],  pts[runLeft  - 1][0]);
-                    if (runRight < pts.length - 1) pts[runRight][0] = Math.min(pts[runRight][0], pts[runRight + 1][0]);
+                    // Only Y is shifted. Spreading X endpoints would create a kink-corner
+                    // (Q bezier) at the approach/departure because the approach to each
+                    // horizontal run is vertical — an X offset reverses direction there.
                 }
             }
         }
@@ -602,20 +599,8 @@ export class NodeConnector {
                     const { c, runStart, runEnd } = overlapping[k];
                     const pts = allPts[c];
                     for (let j = runStart; j <= runEnd; j++) pts[j][0] += delta;
-                    // Spread outermost Y so approach and descent curves also separate,
-                    // but clamp so neither end overshoots its neighbour.
-                    const goingDown = pts[runStart][1] <= pts[runEnd][1];
-                    if (goingDown) {
-                        pts[runStart][1] -= Math.abs(delta);
-                        pts[runEnd][1]   += Math.abs(delta);
-                        if (runStart > 0)              pts[runStart][1] = Math.max(pts[runStart][1], pts[runStart - 1][1]);
-                        if (runEnd < pts.length - 1)   pts[runEnd][1]   = Math.min(pts[runEnd][1],   pts[runEnd   + 1][1]);
-                    } else {
-                        pts[runStart][1] += Math.abs(delta);
-                        pts[runEnd][1]   -= Math.abs(delta);
-                        if (runStart > 0)              pts[runStart][1] = Math.min(pts[runStart][1], pts[runStart - 1][1]);
-                        if (runEnd < pts.length - 1)   pts[runEnd][1]   = Math.max(pts[runEnd][1],   pts[runEnd   + 1][1]);
-                    }
+                    // Only X is shifted — same reasoning as nudgeHorizontalSegments:
+                    // spreading Y endpoints on a vertical run would create kink-corners.
                 }
             }
         }
