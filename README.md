@@ -101,8 +101,7 @@ connector.removeNode('uuid1');
 Declares (or updates) an input pin on the left edge of a node. `relY` is the vertical offset from the node's top-left corner. If the same `nodeId` + `key` pair already exists the position is updated and all connected paths are re-routed.
 
 ```ts
-connector.setInputPin('uuid1', 'in',  38);
-connector.setInputPin('uuid1', 'clk', 54);
+connector.setInputPin('uuid1', 'in',  42);
 ```
 
 ### `setOutputPin(nodeId, key, relY)`
@@ -118,7 +117,7 @@ connector.setOutputPin('uuid2', 'out', 42);
 Removes the input pin and any connections that use it.
 
 ```ts
-connector.removeInputPin('uuid1', 'clk');
+connector.removeInputPin('uuid1', 'in');
 ```
 
 ### `removeOutputPin(nodeId, key)`
