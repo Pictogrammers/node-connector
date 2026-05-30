@@ -239,44 +239,21 @@ connector.connect('transform', 'out', 'report',    'in');
 
 // ── interaction ───────────────────────────────────────────────────────────────
 
-let active = null; // output pin currently being wired
-
-connector.on('click', (pin) => {
-    if (active) {
-        if (pin.type === 'input') {
-            connector.connect(active.nodeId, active.key, pin.nodeId, pin.key);
-            log(`Connected <b>${active.nodeId}</b> → <b>${pin.nodeId}</b>`);
-            active = null;
-        } else {
-            active = pin;
-            connector.setPreviewPin(pin.nodeId, pin.key);
-            log(`Switched to <b>${pin.nodeId}</b> — click an input pin, or ESC to cancel`);
-        }
-    } else if (pin.type === 'output') {
-        active = pin;
-        connector.setPreviewPin(pin.nodeId, pin.key);
-        log(`Dragging from <b>${pin.nodeId}</b> — click an input pin to connect, or ESC to cancel`);
+connector.on('change', (change) => {
+    if (change.type === 'connect') {
+        log(`Connected <b>${change.sourceNodeId}</b> → <b>${change.targetNodeId}</b>`);
+    } else {
+        log(`Removed connection <b>${change.sourceNodeId}</b> → <b>${change.targetNodeId}</b>`);
     }
 });
 
-connector.on('connection-click', (srcId, srcKey, tgtId, tgtKey) => {
-    connector.disconnect(srcId, srcKey, tgtId, tgtKey);
-    log(`Removed connection <b>${srcId}</b> → <b>${tgtId}</b>`);
-});
-
-// Canvas background click: deselect node and/or cancel preview.
-// Node clicks are stopPropagation'd so they never reach here.
-canvas.addEventListener('click', e => {
+// Canvas background click: deselect node. Node clicks are stopPropagation'd so they never reach here.
+canvas.addEventListener('click', () => {
     if (selected) selectNode(null);
-    if (!(e.target instanceof SVGCircleElement) && active) {
-        active = null;
-        log('Cancelled. Click an output pin to begin.');
-    }
 });
 
 document.addEventListener('keydown', e => {
     if (e.key === 'Escape') {
-        if (active) { active = null; log('Cancelled.'); }
         if (selected) selectNode(null);
         return;
     }

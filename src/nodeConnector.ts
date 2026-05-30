@@ -11,6 +11,14 @@ export interface Pin {
     type: 'input' | 'output' | 'preview';
 }
 
+export interface ConnectionChange {
+    type: 'connect' | 'disconnect';
+    sourceNodeId: string;
+    sourceKey: string;
+    targetNodeId: string;
+    targetKey: string;
+}
+
 interface NodeData {
     x: number;
     y: number;
@@ -71,6 +79,7 @@ export class NodeConnector {
     private previewPath: SVGPathElement | null = null;
     private previewPin: Pin | null = null;
     private previewCircle: SVGCircleElement | null = null;
+    private activePin: Pin | null = null;
     private listeners = new Map<string, ((...args: any[]) => void)[]>();
     private onSvgMove: ((e: MouseEvent) => void) | null = null;
     private onDocKey: ((e: KeyboardEvent) => void) | null = null;
@@ -157,12 +166,13 @@ export class NodeConnector {
             }
         });
         hitZone.addEventListener('click', () => {
-            this.emit('connection-click', sourceNodeId, sourceKey, targetNodeId, targetKey);
+            this.disconnect(sourceNodeId, sourceKey, targetNodeId, targetKey);
         });
         this.pathGroup.appendChild(path);
         this.hitGroup.appendChild(hitZone);
         this.connections.push(connData);
         this.redrawPaths();
+        this.emit('change', { type: 'connect', sourceNodeId, sourceKey, targetNodeId, targetKey } as ConnectionChange);
     }
 
     disconnect(sourceNodeId: string, sourceKey: string, targetNodeId: string, targetKey: string): void {
@@ -176,10 +186,10 @@ export class NodeConnector {
         conn.path.remove();
         conn.hitZone.remove();
         this.redrawPaths();
+        this.emit('change', { type: 'disconnect', sourceNodeId, sourceKey, targetNodeId, targetKey } as ConnectionChange);
     }
 
-    on(event: 'click', callback: (pin: Pin) => void): void;
-    on(event: 'connection-click', callback: (sourceNodeId: string, sourceKey: string, targetNodeId: string, targetKey: string) => void): void;
+    on(event: 'change', callback: (change: ConnectionChange) => void): void;
     on(event: string, callback: (...args: any[]) => void): void {
         const list = this.listeners.get(event) ?? [];
         list.push(callback);
@@ -212,15 +222,39 @@ export class NodeConnector {
         };
 
         this.onDocKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') this.clearPreview();
+            if (e.key === 'Escape') {
+                this.activePin = null;
+                this.clearPreview();
+            }
         };
 
-        this.onSvgClick = () => this.clearPreview();
+        this.onSvgClick = (e: MouseEvent) => {
+            if (this.pins.some(p => p.circle === e.target)) return;
+            this.activePin = null;
+            this.clearPreview();
+        };
 
         document.addEventListener('mousemove', this.onSvgMove);
         document.addEventListener('keydown', this.onDocKey);
-        // Defer so the click that triggered this call doesn't bubble to SVG and immediately clear preview
-        setTimeout(() => { if (this.onSvgClick) this.svg.addEventListener('click', this.onSvgClick); }, 0);
+        // Defer so the click that triggered this call doesn't immediately clear the preview
+        setTimeout(() => { if (this.onSvgClick) document.addEventListener('click', this.onSvgClick); }, 0);
+    }
+
+    private handlePinClick(pin: Pin): void {
+        if (this.activePin) {
+            if (pin.type === 'input') {
+                const src = this.activePin;
+                this.activePin = null;
+                this.clearPreview();
+                this.connect(src.nodeId, src.key, pin.nodeId, pin.key);
+            } else {
+                this.activePin = pin;
+                this.setPreviewPin(pin.nodeId, pin.key);
+            }
+        } else if (pin.type === 'output') {
+            this.activePin = pin;
+            this.setPreviewPin(pin.nodeId, pin.key);
+        }
     }
 
     private clearPreview(): void {
@@ -231,7 +265,7 @@ export class NodeConnector {
         this.previewPin = null;
         if (this.onSvgMove) { document.removeEventListener('mousemove', this.onSvgMove); this.onSvgMove = null; }
         if (this.onDocKey) { document.removeEventListener('keydown', this.onDocKey); this.onDocKey = null; }
-        if (this.onSvgClick) { this.svg.removeEventListener('click', this.onSvgClick); this.onSvgClick = null; }
+        if (this.onSvgClick) { document.removeEventListener('click', this.onSvgClick); this.onSvgClick = null; }
     }
 
     private upsertPin(nodeId: string, key: string, relY: number, type: 'input' | 'output'): void {
@@ -247,7 +281,7 @@ export class NodeConnector {
         const circle = this.newCircle(cx, cy);
         circle.style.cursor = 'pointer';
         circle.addEventListener('click', () => {
-            this.emit('click', { nodeId, key, type } as Pin);
+            this.handlePinClick({ nodeId, key, type } as Pin);
         });
         circle.addEventListener('mouseenter', () => {
             circle.setAttribute('fill', this.pinColorHover);
@@ -266,7 +300,7 @@ export class NodeConnector {
                 if (dragging) return;
                 if (Math.hypot(e.clientX - startX, e.clientY - startY) > 5) {
                     dragging = true;
-                    this.emit('click', { nodeId, key, type } as Pin);
+                    this.handlePinClick({ nodeId, key, type } as Pin);
                 }
             };
 
@@ -275,12 +309,14 @@ export class NodeConnector {
                 document.removeEventListener('mouseup', onDragUp);
                 if (!dragging) return;
                 dragging = false;
-                const el = document.elementFromPoint(e.clientX, e.clientY);
+                const el = (this.svg.getRootNode() as Document | ShadowRoot).elementFromPoint(e.clientX, e.clientY);
                 const target = this.pins.find(p => p.circle === el && p.type === 'input');
                 if (target) {
-                    this.emit('click', { nodeId: target.nodeId, key: target.key, type: target.type } as Pin);
+                    this.handlePinClick({ nodeId: target.nodeId, key: target.key, type: target.type } as Pin);
+                } else {
+                    this.activePin = null;
+                    this.clearPreview();
                 }
-                this.clearPreview();
             };
 
             circle.addEventListener('mousedown', (e) => {
