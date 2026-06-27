@@ -141,6 +141,10 @@ export class NodeConnector {
         if (!this.nodes.has(sourceNodeId) || !this.nodes.has(targetNodeId)) return;
         if (!this.pins.some(p => p.nodeId === sourceNodeId && p.key === sourceKey && p.type === 'output')) return;
         if (!this.pins.some(p => p.nodeId === targetNodeId && p.key === targetKey && p.type === 'input')) return;
+        if (this.connections.some(c =>
+            c.sourceNodeId === sourceNodeId && c.sourceKey === sourceKey &&
+            c.targetNodeId === targetNodeId && c.targetKey === targetKey
+        )) return;
 
         const path = this.newPath(false);
         const hitZone = this.newHitZone();
@@ -167,12 +171,12 @@ export class NodeConnector {
         });
         hitZone.addEventListener('click', () => {
             this.disconnect(sourceNodeId, sourceKey, targetNodeId, targetKey);
+            this.emit('change', { type: 'disconnect', sourceNodeId, sourceKey, targetNodeId, targetKey } as ConnectionChange);
         });
         this.pathGroup.appendChild(path);
         this.hitGroup.appendChild(hitZone);
         this.connections.push(connData);
         this.redrawPaths();
-        this.emit('change', { type: 'connect', sourceNodeId, sourceKey, targetNodeId, targetKey } as ConnectionChange);
     }
 
     disconnect(sourceNodeId: string, sourceKey: string, targetNodeId: string, targetKey: string): void {
@@ -186,7 +190,6 @@ export class NodeConnector {
         conn.path.remove();
         conn.hitZone.remove();
         this.redrawPaths();
-        this.emit('change', { type: 'disconnect', sourceNodeId, sourceKey, targetNodeId, targetKey } as ConnectionChange);
     }
 
     on(event: 'change', callback: (change: ConnectionChange) => void): void;
@@ -247,6 +250,13 @@ export class NodeConnector {
                 this.activePin = null;
                 this.clearPreview();
                 this.connect(src.nodeId, src.key, pin.nodeId, pin.key);
+                this.emit('change', {
+                    type: 'connect',
+                    sourceNodeId: src.nodeId,
+                    sourceKey: src.key,
+                    targetNodeId: pin.nodeId, 
+                    targetKey: pin.key,
+                } as ConnectionChange);
             } else {
                 this.activePin = pin;
                 this.setPreviewPin(pin.nodeId, pin.key);
