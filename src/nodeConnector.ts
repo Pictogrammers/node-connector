@@ -171,8 +171,7 @@ export class NodeConnector {
             }
         });
         hitZone.addEventListener('click', () => {
-            this.disconnect(sourceNodeId, sourceKey, targetNodeId, targetKey);
-            this.emit('change', { type: 'disconnect', sourceNodeId, sourceKey, targetNodeId, targetKey } as ConnectionChange);
+            this.emit('connection-click', sourceNodeId, sourceKey, targetNodeId, targetKey);
         });
         this.pathGroup.appendChild(path);
         this.hitGroup.appendChild(hitZone);
@@ -191,9 +190,11 @@ export class NodeConnector {
         conn.path.remove();
         conn.hitZone.remove();
         this.redrawPaths();
+        this.emit('change', { type: 'disconnect', sourceNodeId, sourceKey, targetNodeId, targetKey } as ConnectionChange);
     }
 
     on(event: 'change', callback: (change: ConnectionChange) => void): void;
+    on(event: 'connection-click', callback: (sourceNodeId: string, sourceKey: string, targetNodeId: string, targetKey: string) => void): void;
     on(event: string, callback: (...args: any[]) => void): void {
         const list = this.listeners.get(event) ?? [];
         list.push(callback);
@@ -209,6 +210,7 @@ export class NodeConnector {
         const srcPin = this.pins.find(p => p.nodeId === nodeId && p.key === key && p.type === 'output');
         if (!srcPin) return;
 
+        this.activePin = { nodeId, key, type: 'output' };
         this.previewPin = { nodeId, key, type: 'preview' };
         this.previewPath = this.newPath(true);
         this.connGroup.appendChild(this.previewPath);
@@ -251,13 +253,18 @@ export class NodeConnector {
                 this.activePin = null;
                 this.clearPreview();
                 this.connect(src.nodeId, src.key, pin.nodeId, pin.key);
-                this.emit('change', {
-                    type: 'connect',
-                    sourceNodeId: src.nodeId,
-                    sourceKey: src.key,
-                    targetNodeId: pin.nodeId, 
-                    targetKey: pin.key,
-                } as ConnectionChange);
+                if (this.connections.some(c =>
+                    c.sourceNodeId === src.nodeId && c.sourceKey === src.key &&
+                    c.targetNodeId === pin.nodeId && c.targetKey === pin.key
+                )) {
+                    this.emit('change', {
+                        type: 'connect',
+                        sourceNodeId: src.nodeId,
+                        sourceKey: src.key,
+                        targetNodeId: pin.nodeId,
+                        targetKey: pin.key,
+                    } as ConnectionChange);
+                }
             } else {
                 this.activePin = pin;
                 this.setPreviewPin(pin.nodeId, pin.key);
@@ -291,7 +298,9 @@ export class NodeConnector {
         const cy = node ? node.y + relY : 0;
         const circle = this.newCircle(cx, cy);
         circle.style.cursor = 'pointer';
+        let suppressClick = false;
         circle.addEventListener('click', () => {
+            if (suppressClick) { suppressClick = false; return; }
             this.handlePinClick({ nodeId, key, type } as Pin);
         });
         circle.addEventListener('mouseenter', () => {
@@ -320,6 +329,7 @@ export class NodeConnector {
                 document.removeEventListener('mouseup', onDragUp);
                 if (!dragging) return;
                 dragging = false;
+                suppressClick = true;
                 const el = (this.svg.getRootNode() as Document | ShadowRoot).elementFromPoint(e.clientX, e.clientY);
                 const target = this.pins.find(p => p.circle === el && p.type === 'input');
                 if (target) {
