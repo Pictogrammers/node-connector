@@ -111,6 +111,7 @@ export class NodeConnector {
             conn.cleanupHover();
             conn.path.remove();
             conn.hitZone.remove();
+            this.emit('change', { type: 'disconnect', sourceNodeId: conn.sourceNodeId, sourceKey: conn.sourceKey, targetNodeId: conn.targetNodeId, targetKey: conn.targetKey } as ConnectionChange);
         }
         this.connections = this.connections.filter(c =>
             c.sourceNodeId !== nodeId && c.targetNodeId !== nodeId
@@ -353,6 +354,7 @@ export class NodeConnector {
             conn.cleanupHover();
             conn.path.remove();
             conn.hitZone.remove();
+            this.emit('change', { type: 'disconnect', sourceNodeId: conn.sourceNodeId, sourceKey: conn.sourceKey, targetNodeId: conn.targetNodeId, targetKey: conn.targetKey } as ConnectionChange);
         }
         this.connections = this.connections.filter(c => !toRemove.includes(c));
         const idx = this.pins.findIndex(p => p.nodeId === nodeId && p.key === key && p.type === type);

@@ -1,14 +1,14 @@
 {
   "name": "@pictogrammers/node-connector",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "description": "A zero-dependency TypeScript class that renders routed SVG connections between nodes. Paths automatically navigate around node rectangles, separate overlapping segments, and draw bridge gaps at crossings.",
-  "homepage": "https://github.com/Templarian/spike-node-connector#readme",
+  "homepage": "https://github.com/pictogrammers/node-connector#readme",
   "bugs": {
-    "url": "https://github.com/Templarian/spike-node-connector/issues"
+    "url": "https://github.com/pictogrammers/node-connector/issues"
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Templarian/spike-node-connector.git"
+    "url": "git+https://github.com/pictogrammers/node-connector.git"
   },
   "license": "MIT",
   "author": "Austin Andrews",
